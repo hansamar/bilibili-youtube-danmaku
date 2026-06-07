@@ -666,6 +666,84 @@ async function downloadDanmaku() {
     }
 }
 
+// 导入本地 XML 弹幕文件（YouTube用）
+async function importYouTubeDanmakuFromXml() {
+    const fileInput = document.getElementById('youtube-xml-file-input');
+    if (!fileInput) return;
+
+    fileInput.value = '';
+
+    fileInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const tab = await getCurrentTab();
+        if (!tab || !tab.url.includes('youtube.com/watch')) {
+            showStatus('请在YouTube视频页面使用', 'error');
+            return;
+        }
+
+        const youtubeVideoId = getYouTubeVideoId(tab.url);
+        if (!youtubeVideoId) {
+            showStatus('无法获取YouTube视频ID', 'error');
+            return;
+        }
+
+        const importBtn = document.getElementById('youtube-import-xml-btn');
+        if (importBtn) importBtn.disabled = true;
+        showStatus('正在解析 XML 文件...', 'loading');
+
+        try {
+            const text = await file.text();
+            const danmakus = parseBilibiliXmlDanmaku(text);
+
+            if (!danmakus || danmakus.length === 0) {
+                showStatus('未找到有效弹幕数据，请确认 XML 格式正确', 'error');
+                return;
+            }
+
+            const storageData = {
+                [youtubeVideoId]: {
+                    bvid: '',
+                    bilibili_url: '',
+                    bilibili_title: file.name.replace(/\.xml$/i, ''),
+                    bilibili_pic: '',
+                    bilibili_author: '',
+                    matchRatio: null,
+                    matchSource: 'local_xml',
+                    danmakus: danmakus,
+                    duration: null,
+                    timeOffset: 0,
+                    lastUpdate: Date.now()
+                }
+            };
+
+            await browser.storage.local.set(storageData);
+
+            showStatus(`成功导入 ${danmakus.length} 条弹幕`, 'success');
+            updateDanmakuInfo(danmakus.length);
+
+            // 刷新界面
+            await checkCurrentPageDanmaku();
+
+            // 通知 content script 加载弹幕
+            browser.tabs.sendMessage(tab.id, {
+                type: 'loadDanmaku',
+                youtubeVideoId: youtubeVideoId
+            });
+
+            console.log(`[YouTube Import] 从 ${file.name} 导入 ${danmakus.length} 条弹幕`);
+        } catch (error) {
+            showStatus('导入失败：' + error.message, 'error');
+            console.error('[YouTube Import] 导入 XML 失败:', error);
+        } finally {
+            if (importBtn) importBtn.disabled = false;
+        }
+    };
+
+    fileInput.click();
+}
+
 // 检查当前页面弹幕状态
 async function checkCurrentPageDanmaku() {
     const tab = await getCurrentTab();
@@ -2872,6 +2950,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 绑定事件
     document.getElementById('download-btn').addEventListener('click', downloadDanmaku);
+    document.getElementById('youtube-import-xml-btn').addEventListener('click', importYouTubeDanmakuFromXml);
     document.getElementById('associate-btn').addEventListener('click', associateUploader);
     document.getElementById('unassociate-btn').addEventListener('click', unassociateUploader);
     document.getElementById('auto-search-btn').addEventListener('click', autoSearchDanmaku);
