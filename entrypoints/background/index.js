@@ -464,7 +464,7 @@ export default defineBackground(() => {
     }
 
     // 获取视频信息
-    async function getVideoInfo(bvid) {
+    async function getVideoInfo(bvid, p = null) {
         const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
             credentials: 'include'
         });
@@ -473,10 +473,26 @@ export default defineBackground(() => {
         if (data.code !== 0) throw new Error(`获取视频信息失败: ${data.message}`);
         if (!data.data?.aid || !data.data?.cid) throw new Error('无法获取视频信息');
 
+        // 处理分p：如果有p参数且pages数组存在，使用对应页的cid和duration
+        let cid = data.data.cid;
+        let duration = data.data.duration;
+        const pages = data.data.pages;
+        if (p !== null && p !== undefined && Array.isArray(pages) && pages.length > 0) {
+            const pageIndex = p - 1;
+            if (pageIndex >= 0 && pageIndex < pages.length) {
+                const page = pages[pageIndex];
+                cid = page.cid;
+                duration = page.duration;
+                console.log(`[getVideoInfo] 使用分p=${p} 的 cid=${cid}, duration=${duration}`);
+            } else {
+                console.warn(`[getVideoInfo] 分p=${p} 超出范围(1-${pages.length})，使用默认`);
+            }
+        }
+
         return {
             aid: data.data.aid,
-            cid: data.data.cid,
-            duration: data.data.duration,
+            cid: cid,
+            duration: duration,
             title: data.data.title,
             pic: data.data.pic || '',
             author: data.data.owner?.name || ''
@@ -748,13 +764,13 @@ export default defineBackground(() => {
     }
 
     // 下载所有弹幕
-    async function downloadAllDanmaku(bvid, youtubeVideoDuration) {
+    async function downloadAllDanmaku(bvid, youtubeVideoDuration, p = null) {
         try {
             // 1. 获取WBI Keys
             const wbiKeys = await getWbiKeys();
 
             // 2. 获取视频信息
-            const { cid, duration, aid, title, pic, author } = await getVideoInfo(bvid);
+            const { cid, duration, aid, title, pic, author } = await getVideoInfo(bvid, p);
 
             // 3. 计算分段数（每段6分钟）
             const segmentCount = Math.ceil(duration / 360);
@@ -1614,14 +1630,18 @@ export default defineBackground(() => {
     // 监听来自popup的消息
     browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.type === 'downloadDanmaku') {
-            downloadAllDanmaku(request.bvid, request.youtubeVideoDuration)
+            downloadAllDanmaku(request.bvid, request.youtubeVideoDuration, request.p)
                 .then(async (data) => {
                     const matchInfo = request.matchInfo || {};
+                    // 构建bilibili_url，分p时带上p参数
+                    const bilibiliUrl = request.p
+                        ? `https://www.bilibili.com/video/${request.bvid}?p=${request.p}`
+                        : `https://www.bilibili.com/video/${request.bvid}`;
                     // 保存弹幕数据
                     const storageData = {
                         [request.youtubeVideoId]: {
                             bvid: request.bvid,
-                            bilibili_url: `https://www.bilibili.com/video/${request.bvid}`,
+                            bilibili_url: bilibiliUrl,
                             bilibili_title: data.title,
                             bilibili_pic: matchInfo.pic || data.pic || '',
                             bilibili_author: matchInfo.author || data.author || '',
@@ -1719,9 +1739,13 @@ export default defineBackground(() => {
             return true; // 保持消息通道开启
         } else if (request.type === 'downloadDanmakuForQuark') {
             // Quark 专用：下载弹幕并保存（使用 quark_ 前缀）
-            downloadAllDanmaku(request.bvid, request.videoDuration)
+            downloadAllDanmaku(request.bvid, request.videoDuration, request.p)
                 .then(async (data) => {
                     const matchInfo = request.matchInfo || {};
+                    // 构建bilibili_url，分p时带上p参数
+                    const bilibiliUrl = request.p
+                        ? `https://www.bilibili.com/video/${request.bvid}?p=${request.p}`
+                        : `https://www.bilibili.com/video/${request.bvid}`;
                     // 保存弹幕数据（使用 quark_ 前缀）
                     const storageKey = request.quarkVideoId?.startsWith('quark_')
                         ? request.quarkVideoId
@@ -1729,7 +1753,7 @@ export default defineBackground(() => {
                     const storageData = {
                         [storageKey]: {
                             bvid: request.bvid,
-                            bilibili_url: `https://www.bilibili.com/video/${request.bvid}`,
+                            bilibili_url: bilibiliUrl,
                             bilibili_title: data.title,
                             bilibili_pic: matchInfo.pic || data.pic || '',
                             bilibili_author: matchInfo.author || data.author || '',

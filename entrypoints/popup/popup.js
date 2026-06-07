@@ -73,9 +73,15 @@ function avToBv(avid) {
 // 解析B站视频ID
 function parseBilibiliUrl(url) {
     const bvMatch = url.match(/bilibili\.com\/video\/(BV\w+)/);
-    if (bvMatch) return bvMatch[1];
+    if (bvMatch) {
+        const pMatch = url.match(/[?&]p=(\d+)/);
+        return { bvid: bvMatch[1], p: pMatch ? parseInt(pMatch[1]) : null };
+    }
     const avMatch = url.match(/bilibili\.com\/video\/av(\d+)/i);
-    if (avMatch) return avToBv(avMatch[1]);
+    if (avMatch) {
+        const pMatch = url.match(/[?&]p=(\d+)/);
+        return { bvid: avToBv(avMatch[1]), p: pMatch ? parseInt(pMatch[1]) : null };
+    }
     return null;
 }
 
@@ -595,11 +601,12 @@ async function downloadDanmaku() {
         return;
     }
 
-    const bvid = parseBilibiliUrl(url);
-    if (!bvid) {
+    const parsed = parseBilibiliUrl(url);
+    if (!parsed) {
         showStatus('无效的B站视频链接', 'error');
         return;
     }
+    const { bvid, p } = parsed;
 
     const tab = await getCurrentTab();
     if (!tab || !tab.url.includes('youtube.com/watch')) {
@@ -636,6 +643,7 @@ async function downloadDanmaku() {
         const response = await browser.runtime.sendMessage({
             type: 'downloadDanmaku',
             bvid: bvid,
+            p: p,
             youtubeVideoId: youtubeVideoId,
             youtubeVideoDuration: youtubeVideoDuration,
             matchInfo: {
@@ -2513,11 +2521,12 @@ async function downloadQuarkDanmaku() {
         return;
     }
 
-    const bvid = parseBilibiliUrl(url);
-    if (!bvid) {
+    const parsed = parseBilibiliUrl(url);
+    if (!parsed) {
         showQuarkStatus('无效的B站视频链接', 'error');
         return;
     }
+    const { bvid, p } = parsed;
 
     const tab = await getCurrentTab();
     if (!tab || !tab.url.includes('pan.quark.cn')) {
@@ -2553,6 +2562,7 @@ async function downloadQuarkDanmaku() {
         const response = await browser.runtime.sendMessage({
             type: 'downloadDanmaku',
             bvid: bvid,
+            p: p,
             youtubeVideoId: `quark_${quarkVideoId}`, // 使用 quark_ 前缀
             youtubeVideoDuration: videoDuration,
             matchInfo: {
