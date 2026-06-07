@@ -2141,6 +2141,12 @@ function bindQuarkUIEvents() {
         downloadBtn.addEventListener('click', downloadQuarkDanmaku);
     }
 
+    const importXmlBtn = document.getElementById('quark-import-xml-btn');
+    if (importXmlBtn && !importXmlBtn.hasAttribute('data-bound')) {
+        importXmlBtn.setAttribute('data-bound', 'true');
+        importXmlBtn.addEventListener('click', importQuarkDanmakuFromXml);
+    }
+
     const viewBilibiliBtn = document.getElementById('quark-view-bilibili-btn');
     if (viewBilibiliBtn && !viewBilibiliBtn.hasAttribute('data-bound')) {
         viewBilibiliBtn.setAttribute('data-bound', 'true');
@@ -2508,6 +2514,143 @@ async function downloadQuarkDanmaku() {
     } finally {
         if (downloadBtn) downloadBtn.disabled = false;
     }
+}
+
+// 导入本地 XML 弹幕文件（B站格式）
+async function importQuarkDanmakuFromXml() {
+    const fileInput = document.getElementById('quark-xml-file-input');
+    if (!fileInput) return;
+
+    // 清除之前的选择，确保每次都能触发 change 事件
+    fileInput.value = '';
+
+    // 文件选择后的回调
+    fileInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const tab = await getCurrentTab();
+        if (!tab || !tab.url.includes('pan.quark.cn')) {
+            showQuarkStatus('请在夸克网盘视频页面使用', 'error');
+            return;
+        }
+
+        const pageInfo = await getQuarkPageInfo(tab);
+        const quarkVideoId = pageInfo?.videoId || getQuarkRouteVideoId(tab.url);
+
+        if (!quarkVideoId) {
+            showQuarkStatus('请在视频播放页面使用', 'error');
+            return;
+        }
+
+        const importBtn = document.getElementById('quark-import-xml-btn');
+        if (importBtn) importBtn.disabled = true;
+        showQuarkStatus('正在解析 XML 文件...', 'loading');
+
+        try {
+            const text = await file.text();
+            const danmakus = parseBilibiliXmlDanmaku(text);
+
+            if (!danmakus || danmakus.length === 0) {
+                showQuarkStatus('未找到有效弹幕数据，请确认 XML 格式正确', 'error');
+                return;
+            }
+
+            // 构建存储数据，与 downloadDanmakuForQuark 格式一致
+            const storageKey = `quark_${quarkVideoId}`;
+            const storageData = {
+                [storageKey]: {
+                    bvid: '',
+                    bilibili_url: '',
+                    bilibili_title: file.name.replace(/\.xml$/i, ''),
+                    bilibili_pic: '',
+                    bilibili_author: '',
+                    matchRatio: null,
+                    matchSource: 'local_xml',
+                    danmakus: danmakus,
+                    duration: null,
+                    timeOffset: 0,
+                    lastUpdate: Date.now()
+                }
+            };
+
+            await browser.storage.local.set(storageData);
+
+            showQuarkStatus(`成功导入 ${danmakus.length} 条弹幕`, 'success');
+
+            // 更新弹幕信息显示
+            const danmakuInfo = document.getElementById('quark-danmaku-info');
+            if (danmakuInfo) {
+                danmakuInfo.textContent = `已加载 ${danmakus.length} 条弹幕（本地导入）`;
+                danmakuInfo.classList.add('show');
+            }
+
+            // 显示弹幕列表
+            renderQuarkMatchedVideo(storageData[storageKey]);
+            displayQuarkDanmakuList(danmakus);
+
+            // 通知 content script 加载弹幕
+            browser.tabs.sendMessage(tab.id, {
+                type: 'loadDanmaku',
+                quarkVideoId: quarkVideoId
+            });
+
+            console.log(`[Quark Import] 从 ${file.name} 导入 ${danmakus.length} 条弹幕`);
+        } catch (error) {
+            showQuarkStatus('导入失败：' + error.message, 'error');
+            console.error('[Quark Import] 导入 XML 失败:', error);
+        } finally {
+            if (importBtn) importBtn.disabled = false;
+        }
+    };
+
+    // 触发文件选择对话框
+    fileInput.click();
+}
+
+// 解析 B 站弹幕 XML 格式
+function parseBilibiliXmlDanmaku(xmlText) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, 'text/xml');
+
+    // 检查解析错误
+    const parseError = doc.querySelector('parsererror');
+    if (parseError) {
+        throw new Error('XML 解析失败：' + parseError.textContent);
+    }
+
+    const danmakus = [];
+    const dElements = doc.querySelectorAll('d');
+
+    for (const d of dElements) {
+        const p = d.getAttribute('p');
+        const text = d.textContent;
+
+        if (!p || !text) continue;
+
+        const parts = p.split(',');
+        if (parts.length < 5) continue;
+
+        // B站 XML p 属性格式: time,mode,fontSize,color,timestamp,pool,userID,hash
+        const time = parseFloat(parts[0]) || 0;
+        const mode = parseInt(parts[1]) || 1;
+        const fontSize = parseInt(parts[2]) || 25;
+        const color = parseInt(parts[3]) || 16777215; // 默认白色
+        // parts[4] = timestamp, parts[5] = pool, parts[6] = userID, parts[7] = hash
+
+        danmakus.push({
+            time: time,
+            text: text,
+            color: color,
+            mode: mode,
+            weight: fontSize
+        });
+    }
+
+    // 按时间排序
+    danmakus.sort((a, b) => a.time - b.time);
+
+    return danmakus;
 }
 
 // 显示 Quark 弹幕列表
